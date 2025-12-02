@@ -1,6 +1,7 @@
 package com.fishseller.whatsappservice.model;
 
 import com.fishseller.whatsappservice.model.enums.CustomerFlowStage;
+import com.fishseller.whatsappservice.model.enums.UserRole;
 import jakarta.persistence.*;
 import lombok.AllArgsConstructor;
 import lombok.Builder;
@@ -33,10 +34,21 @@ public class Customer {
 
     private Double distanceFromBusinessKm; // Calculated distance from business location
 
+    @Column(nullable = false)
+    @Builder.Default
+    private Boolean isPincodeValid = false; // Whether the customer's pincode is valid for delivery
+
     @Enumerated(EnumType.STRING)
     @Column(nullable = false)
     @Builder.Default
     private CustomerFlowStage currentFlowStage = CustomerFlowStage.NEW;
+
+    @Enumerated(EnumType.STRING)
+    @Column(nullable = false)
+    @Builder.Default
+    private UserRole role = UserRole.CUSTOMER;
+
+    private Long addedByExecutiveId; // Track which executive added this customer
 
     private LocalDateTime registeredAt;
 

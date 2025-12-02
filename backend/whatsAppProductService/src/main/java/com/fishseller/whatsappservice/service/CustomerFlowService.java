@@ -7,6 +7,7 @@ import com.fishseller.whatsappservice.dto.WhatsAppWebhookDto;
 import com.fishseller.whatsappservice.model.*;
 import com.fishseller.whatsappservice.model.enums.CustomerFlowStage;
 import com.fishseller.whatsappservice.model.enums.OrderStatus;
+import com.fishseller.whatsappservice.model.enums.UserRole;
 import com.fishseller.whatsappservice.repository.*;
 import lombok.RequiredArgsConstructor;
 import lombok.extern.slf4j.Slf4j;
@@ -30,14 +31,17 @@ public class CustomerFlowService {
     private final FishProductRepository fishProductRepository;
     private final CustomerOrderRepository customerOrderRepository;
     private final OrderItemRepository orderItemRepository;
-    private final DeliveryPersonRepository deliveryPersonRepository;
+    private final TeamMemberRepository teamMemberRepository;
     private final WhatsAppService whatsAppService;
     private final WhatsAppConfig whatsAppConfig;
     private final LocationValidationService locationValidationService;
     private final ShoppingCartService shoppingCartService;
+    private final ExecutiveFlowService executiveFlowService;
 
     /**
      * Main entry point for processing incoming WhatsApp messages
+     * Routes messages based on sender role: TeamMember (Executive/Delivery) or
+     * Customer
      */
     @Transactional
     public void processIncomingMessage(WhatsAppWebhookDto.Value messageValue) {
@@ -50,7 +54,36 @@ public class CustomerFlowService {
 
         log.info("Processing message from: {}", fromWaId);
 
-        // Get or create customer
+        // Check if sender is a team member (Executive or Delivery Person)
+        Optional<TeamMember> teamMemberOpt = teamMemberRepository.findByWaPhoneNumber(fromWaId);
+
+        if (teamMemberOpt.isPresent()) {
+            TeamMember teamMember = teamMemberOpt.get();
+
+            if (teamMember.getRole() == UserRole.EXECUTIVE) {
+                // Route to Executive Flow
+                log.info("Routing to Executive Flow for: {}", teamMember.getName());
+                executiveFlowService.handleExecutiveMessage(teamMember, message);
+                return;
+            } else if (teamMember.getRole() == UserRole.DELIVERY_PERSON) {
+                // Handle delivery person button replies (order confirmation)
+                if (message.getType().equals("interactive") &&
+                        message.getInteractive().getType().equals("button_reply")) {
+                    WhatsAppWebhookDto.ButtonReply buttonReply = message.getInteractive().getButtonReply();
+                    if (buttonReply.getId().startsWith("DELIVERY_TAKE_")) {
+                        Long orderId = Long.parseLong(buttonReply.getId().replace("DELIVERY_TAKE_", ""));
+                        handleDeliveryConfirmation(fromWaId, orderId);
+                        return;
+                    }
+                }
+                // For other messages from delivery persons, just acknowledge
+                whatsAppService.sendSimpleText(fromWaId,
+                        "Thank you! Please use the order confirmation buttons in the group.");
+                return;
+            }
+        }
+
+        // If not a team member, treat as customer
         Customer customer = customerRepository.findByWaPhoneNumber(fromWaId)
                 .orElseGet(() -> {
                     Customer newCustomer = Customer.builder()
@@ -60,7 +93,7 @@ public class CustomerFlowService {
                     return customerRepository.save(newCustomer);
                 });
 
-        // Handle different message types
+        // Handle different message types for customers
         if (message.getType().equals("text") && message.getText() != null) {
             handleTextMessage(customer, message.getText().getBody());
         } else if (message.getType().equals("location") && message.getLocation() != null) {
@@ -452,33 +485,34 @@ public class CustomerFlowService {
      * 14. Handle delivery person confirmation
      */
     @Transactional
-    public void handleDeliveryConfirmation(String deliveryPersonWaId, Long orderId) {
+    public void handleDeliveryConfirmation(String teamMemberWaId, Long orderId) {
         CustomerOrder order = customerOrderRepository.findById(orderId)
                 .orElseThrow(() -> new RuntimeException("Order not found: " + orderId));
 
         if (order.getStatus() == OrderStatus.CONFIRMED) {
-            whatsAppService.sendSimpleText(deliveryPersonWaId,
-                    "This order has already been taken by " + order.getDeliveryPersonName());
+            whatsAppService.sendSimpleText(teamMemberWaId,
+                    "This order has already been taken by " + order.getTeamMemberName());
             return;
         }
 
-        // Get or create delivery person
-        DeliveryPerson deliveryPerson = deliveryPersonRepository
-                .findByWaPhoneNumber(deliveryPersonWaId)
+        // Get or create team member (delivery person)
+        TeamMember teamMember = teamMemberRepository
+                .findByWaPhoneNumber(teamMemberWaId)
                 .orElseGet(() -> {
-                    DeliveryPerson dp = DeliveryPerson.builder()
-                            .waPhoneNumber(deliveryPersonWaId)
+                    TeamMember tm = TeamMember.builder()
+                            .waPhoneNumber(teamMemberWaId)
                             .name("Delivery Person "
-                                    + deliveryPersonWaId.substring(0, Math.min(10, deliveryPersonWaId.length())))
+                                    + teamMemberWaId.substring(0, Math.min(10, teamMemberWaId.length())))
+                            .role(UserRole.DELIVERY_PERSON)
                             .build();
-                    return deliveryPersonRepository.save(dp);
+                    return teamMemberRepository.save(tm);
                 });
 
         // Update order
         order.setStatus(OrderStatus.CONFIRMED);
-        order.setDeliveryPersonId(deliveryPerson.getId());
-        order.setDeliveryPersonWaId(deliveryPersonWaId);
-        order.setDeliveryPersonName(deliveryPerson.getName());
+        order.setTeamMemberId(teamMember.getId());
+        order.setTeamMemberWaId(teamMemberWaId);
+        order.setTeamMemberName(teamMember.getName());
         order.setConfirmedAt(LocalDateTime.now());
         customerOrderRepository.save(order);
 
@@ -488,13 +522,13 @@ public class CustomerFlowService {
 
         whatsAppService.sendDeliveryAssignmentNotification(
                 customer.getWaPhoneNumber(),
-                deliveryPerson.getName());
+                teamMember.getName());
 
         // Notify group
         String groupId = whatsAppConfig.getDeliveryGroupId();
         whatsAppService.sendSimpleText(groupId,
-                "✅ Order #" + orderId + " taken by " + deliveryPerson.getName());
+                "✅ Order #" + orderId + " taken by " + teamMember.getName());
 
-        log.info("Order {} assigned to delivery person {}", orderId, deliveryPerson.getName());
+        log.info("Order {} assigned to team member {}", orderId, teamMember.getName());
     }
 }

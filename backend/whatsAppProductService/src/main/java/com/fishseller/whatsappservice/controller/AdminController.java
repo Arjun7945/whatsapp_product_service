@@ -1,8 +1,8 @@
 package com.fishseller.whatsappservice.controller;
 
-import com.fishseller.whatsappservice.model.DeliveryPerson;
+import com.fishseller.whatsappservice.model.TeamMember;
 import com.fishseller.whatsappservice.model.FishProduct;
-import com.fishseller.whatsappservice.repository.DeliveryPersonRepository;
+import com.fishseller.whatsappservice.repository.TeamMemberRepository;
 import com.fishseller.whatsappservice.repository.FishProductRepository;
 import lombok.RequiredArgsConstructor;
 import lombok.extern.slf4j.Slf4j;
@@ -18,7 +18,7 @@ import java.util.List;
 public class AdminController {
 
     private final FishProductRepository fishProductRepository;
-    private final DeliveryPersonRepository deliveryPersonRepository;
+    private final TeamMemberRepository teamMemberRepository;
     private final com.fishseller.whatsappservice.repository.CustomerOrderRepository customerOrderRepository;
     private final com.fishseller.whatsappservice.repository.CustomerRepository customerRepository;
 
@@ -65,35 +65,36 @@ public class AdminController {
         return ResponseEntity.notFound().build();
     }
 
-    // --- Delivery Person Management ---
+    // --- Team Member Management ---
 
-    @GetMapping("/delivery")
-    public List<DeliveryPerson> getAllDeliveryPersons() {
-        return deliveryPersonRepository.findAll();
+    @GetMapping("/team-members")
+    public List<TeamMember> getAllTeamMembers() {
+        return teamMemberRepository.findAll();
     }
 
-    @PostMapping("/delivery")
-    public DeliveryPerson createDeliveryPerson(@RequestBody DeliveryPerson deliveryPerson) {
-        return deliveryPersonRepository.save(deliveryPerson);
+    @PostMapping("/team-members")
+    public TeamMember createTeamMember(@RequestBody TeamMember teamMember) {
+        return teamMemberRepository.save(teamMember);
     }
 
-    @PutMapping("/delivery/{id}")
-    public ResponseEntity<DeliveryPerson> updateDeliveryPerson(@PathVariable Long id,
-            @RequestBody DeliveryPerson details) {
-        return deliveryPersonRepository.findById(id)
+    @PutMapping("/team-members/{id}")
+    public ResponseEntity<TeamMember> updateTeamMember(@PathVariable Long id,
+            @RequestBody TeamMember details) {
+        return teamMemberRepository.findById(id)
                 .map(person -> {
                     person.setName(details.getName());
                     person.setPhoneNumber(details.getPhoneNumber());
                     person.setActive(details.isActive());
-                    return ResponseEntity.ok(deliveryPersonRepository.save(person));
+                    person.setRole(details.getRole());
+                    return ResponseEntity.ok(teamMemberRepository.save(person));
                 })
                 .orElse(ResponseEntity.notFound().build());
     }
 
-    @DeleteMapping("/delivery/{id}")
-    public ResponseEntity<Void> deleteDeliveryPerson(@PathVariable Long id) {
-        if (deliveryPersonRepository.existsById(id)) {
-            deliveryPersonRepository.deleteById(id);
+    @DeleteMapping("/team-members/{id}")
+    public ResponseEntity<Void> deleteTeamMember(@PathVariable Long id) {
+        if (teamMemberRepository.existsById(id)) {
+            teamMemberRepository.deleteById(id);
             return ResponseEntity.ok().build();
         }
         return ResponseEntity.notFound().build();
@@ -155,7 +156,7 @@ public class AdminController {
                 .customerName(customerName)
                 .totalAmount(order.getTotalAmount())
                 .status(order.getStatus().name())
-                .deliveryPersonId(order.getDeliveryPersonId())
+                .teamMemberId(order.getTeamMemberId())
                 .items(items)
                 .build();
     }

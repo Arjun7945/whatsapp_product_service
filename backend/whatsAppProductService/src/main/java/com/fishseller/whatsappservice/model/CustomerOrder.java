@@ -40,11 +40,11 @@ public class CustomerOrder {
     @Builder.Default
     private String paymentMethod = "COD"; // Default to Cash on Delivery
 
-    private Long deliveryPersonId; // Assigned delivery person ID
+    private Long teamMemberId; // Assigned team member ID (delivery person or executive)
 
-    private String deliveryPersonWaId; // WhatsApp ID of delivery person
+    private String teamMemberWaId; // WhatsApp ID of team member
 
-    private String deliveryPersonName; // Name of delivery person
+    private String teamMemberName; // Name of team member
 
     private LocalDateTime confirmedAt; // When delivery person confirmed
 

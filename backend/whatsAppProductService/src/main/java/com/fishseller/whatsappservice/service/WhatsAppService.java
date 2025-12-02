@@ -141,6 +141,18 @@ public class WhatsAppService {
                 sendSimpleText(customerWaId, message);
         }
 
+        /**
+         * Send welcome message to newly added customer
+         */
+        public void sendCustomerWelcomeMessage(String customerWaId) {
+                String message = "🎉 Welcome to our Fresh Fish Store!\n\n" +
+                                "You have been added to our customer list.\n\n" +
+                                "Get ready to start ordering fresh fish daily!\n\n" +
+                                "Send 'start' to see the daily fresh fish details and continue. 🐟";
+
+                sendSimpleText(customerWaId, message);
+        }
+
         private void sendToMeta(WhatsAppMessageDto message) {
                 try {
                         getRestClient().post()

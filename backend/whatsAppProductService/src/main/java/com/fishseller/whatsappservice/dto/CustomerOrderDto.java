@@ -13,6 +13,6 @@ public class CustomerOrderDto {
     private String customerName;
     private Double totalAmount;
     private String status;
-    private Long deliveryPersonId;
+    private Long teamMemberId;
     private List<OrderItemDto> items;
 }

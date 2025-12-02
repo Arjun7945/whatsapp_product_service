@@ -13,9 +13,9 @@ import org.springframework.stereotype.Service;
 public class LocationValidationService {
 
     // Business location coordinates
-    private static final double BUSINESS_LAT = 10.79427;
-    private static final double BUSINESS_LON = 76.53016;
-    private static final double DELIVERY_RADIUS_KM = 50.0;
+    private static final double BUSINESS_LAT = 10.7944769;
+    private static final double BUSINESS_LON = 76.5306715;
+    private static final double DELIVERY_RADIUS_KM = 70.0;
 
     /**
      * Calculate distance between two coordinates using Haversine formula
