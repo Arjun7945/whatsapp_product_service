@@ -4,6 +4,7 @@ import com.fishseller.whatsappservice.dto.WhatsAppMessageDto;
 import com.fishseller.whatsappservice.dto.WhatsAppWebhookDto;
 import com.fishseller.whatsappservice.model.Customer;
 import com.fishseller.whatsappservice.model.TeamMember;
+import com.fishseller.whatsappservice.model.enums.CustomerFlowStage;
 import com.fishseller.whatsappservice.model.enums.ExecutiveFlowStage;
 import com.fishseller.whatsappservice.model.enums.UserRole;
 import com.fishseller.whatsappservice.repository.CustomerRepository;
@@ -211,7 +212,7 @@ public class ExecutiveFlowService {
             return;
         }
 
-        // Create customer
+        // Create customer with REGISTERED flow stage
         Customer newCustomer = Customer.builder()
                 .name(executive.getTempCustomerName())
                 .phoneNumber(executive.getTempCustomerPhone())
@@ -220,6 +221,7 @@ public class ExecutiveFlowService {
                 .locationLon(customerLon)
                 .distanceFromBusinessKm(distance)
                 .role(UserRole.CUSTOMER)
+                .currentFlowStage(CustomerFlowStage.REGISTERED) // Set to REGISTERED so they can start browsing
                 .addedByExecutiveId(executive.getId())
                 .registeredAt(LocalDateTime.now())
                 .build();

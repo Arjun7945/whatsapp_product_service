@@ -1,0 +1,62 @@
+@startuml
+!theme plain
+skinparam backgroundColor white
+skinparam defaultFontName Arial
+
+actor "Customer" as C
+participant "WhatsApp" as WA
+participant "Backend\nService" as B
+database "Database" as DB
+participant "Delivery\nGroup" as DG
+actor "Delivery\nPerson" as DP
+
+== Customer Registration & Shopping ==
+C -> WA: Send "Hi"
+WA -> B: Webhook: Text Message
+B -> C: "What's your name?"
+C -> WA: Send Name
+B -> C: "Share your phone number"
+C -> WA: Send Phone
+B -> C: "Share your location"
+C -> WA: Send Location
+B -> B: Validate delivery area
+B -> DB: Save customer
+B -> C: "You're registered! Send 'start'"
+
+== Product Selection ==
+C -> WA: Send "start"
+B -> DB: Fetch available products
+B -> C: Product list (interactive)
+C -> WA: Select fish product
+B -> C: "How many KG?"
+C -> WA: Enter quantity (e.g., 2)
+B -> DB: Add to cart
+B -> C: "Added to cart!" + buttons
+
+== Checkout Process ==
+C -> WA: Click "Checkout"
+B -> DB: Get cart items
+B -> C: Cart summary + "Confirm Order" button
+C -> WA: Click "Confirm Order"
+
+== Order Placement ==
+B -> DB: Create order (status: PENDING)
+B -> DB: Create order items
+B -> DB: Clear cart
+B -> C: ✅ Order Confirmed! #123
+B -> DG: 🔔 NEW ORDER #123 + "Confirm Delivery" button
+
+== Delivery Assignment ==
+DP -> WA: Click "Confirm Delivery"
+WA -> B: Webhook: Button Reply
+B -> DB: Check if DP has DELIVERY_PERSON role
+
+alt Authorized Delivery Person
+    B -> DB: Update order (status: CONFIRMED)
+    B -> C: 🚚 Delivery Person Assigned!
+    B -> DG: ✅ ORDER CONFIRMED (with DP details)
+else Unauthorized User
+    B -> DP: ❌ Unauthorized Access
+end
+
+@enduml

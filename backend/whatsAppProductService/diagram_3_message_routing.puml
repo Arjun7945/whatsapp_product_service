@@ -1,0 +1,55 @@
+@startuml
+!theme plain
+skinparam backgroundColor white
+skinparam defaultFontName Arial
+
+start
+#9C27B0:WhatsApp Message\nReceived;
+
+:WebhookController;
+#673AB7
+
+:CustomerFlowService\nprocessIncomingMessage();
+#3F51B5
+
+if (Sender in\nteam_members table?) then (NO)
+  #2196F3:Treat as Customer;
+  
+  if (Message Type?) then (Text)
+    #64B5F6:Customer Text Flow\nRegistration/Shopping;
+    stop
+  elseif (Location)
+    #64B5F6:Location Handler\nValidate Delivery Area;
+    stop
+  elseif (Button Reply)
+    #64B5F6:Button Handler\nCheckout/Confirm;
+    stop
+  else (List Selection)
+    #64B5F6:List Handler\nProduct Selection;
+    stop
+  endif
+  
+else (YES)
+  if (Check Role) then (EXECUTIVE)
+    #00BCD4:ExecutiveFlowService\nhandleExecutiveMessage;
+    #4DD0E1:Add Customer\nView Customers;
+    stop
+    
+  else (DELIVERY_PERSON)
+    if (Message Type?) then (Button Reply\nDELIVERY_TAKE_*)
+      #4CAF50:**DeliveryFlowService**\n**handleDeliveryConfirmation**\n✅ MAIN DELIVERY LOGIC;
+      note right
+        This is the core
+        delivery confirmation
+        logic with role
+        validation
+      end note
+      stop
+    else (Other)
+      #FF9800:Send: Please use\nconfirmation buttons\nin the group;
+      stop
+    endif
+  endif
+endif
+
+@enduml

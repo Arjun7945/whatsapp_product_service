@@ -1,0 +1,41 @@
+@startuml
+!theme plain
+skinparam backgroundColor white
+skinparam defaultFontName Arial
+
+start
+:Delivery Person Clicks\n'Confirm Delivery' Button;
+#2196F3
+
+if (Order Status\n= CONFIRMED?) then (YES)
+  #F44336:Send: Order already\ntaken by other person;
+  stop
+else (NO)
+  if (User exists in\nteam_members table?) then (NO)
+    #F44336:Send: Unauthorized Access\nYou are not registered\nas delivery person;
+    stop
+  else (YES)
+    if (User Role\n= DELIVERY_PERSON?) then (NO)
+      #F44336:Send: Unauthorized Access\nWrong role - Only delivery\npersons can confirm;
+      stop
+    else (YES)
+      #4CAF50:Update Order Status\nPENDING → CONFIRMED;
+      #4CAF50:Save Delivery Person ID;
+      #4CAF50:Save Delivery Person Name;
+      #4CAF50:Save Delivery Person\nWhatsApp ID;
+      #4CAF50:Set confirmed_at\ntimestamp;
+      #66BB6A:Save to Database;
+      
+      fork
+        #2196F3:Send to Customer:\n🚚 Delivery Person Assigned!\nYour order will be\ndelivered by NAME;
+      fork again
+        #FF9800:Send to Group:\n✅ ORDER CONFIRMED\n📦 Order #123 assigned\n👤 Name: Rajesh Kumar\n📞 Phone: 9876543210\n⏰ Confirmed at: 10:05 AM;
+      end fork
+      
+      #4CAF50:Success;
+      stop
+    endif
+  endif
+endif
+
+@enduml

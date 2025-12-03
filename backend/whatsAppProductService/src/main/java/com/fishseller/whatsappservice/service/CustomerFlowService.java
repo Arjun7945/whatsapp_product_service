@@ -1,7 +1,7 @@
 package com.fishseller.whatsappservice.service;
 
-import com.fishseller.whatsappservice.config.WhatsAppConfig;
 import com.fishseller.whatsappservice.dto.CartItemDto;
+import com.fishseller.whatsappservice.dto.UserLookupResult;
 import com.fishseller.whatsappservice.dto.WhatsAppMessageDto;
 import com.fishseller.whatsappservice.dto.WhatsAppWebhookDto;
 import com.fishseller.whatsappservice.model.*;
@@ -31,17 +31,25 @@ public class CustomerFlowService {
     private final FishProductRepository fishProductRepository;
     private final CustomerOrderRepository customerOrderRepository;
     private final OrderItemRepository orderItemRepository;
-    private final TeamMemberRepository teamMemberRepository;
     private final WhatsAppService whatsAppService;
-    private final WhatsAppConfig whatsAppConfig;
     private final LocationValidationService locationValidationService;
     private final ShoppingCartService shoppingCartService;
     private final ExecutiveFlowService executiveFlowService;
+    private final DeliveryFlowService deliveryFlowService;
+    private final UserRoleLookupService userRoleLookupService;
 
     /**
      * Main entry point for processing incoming WhatsApp messages
      * Routes messages based on sender role: TeamMember (Executive/Delivery) or
      * Customer
+     * 
+     * Flow:
+     * 1. Lookup user role using UserRoleLookupService
+     * 2. Route based on role:
+     * - EXECUTIVE -> ExecutiveFlowService
+     * - DELIVERY_PERSON -> DeliveryFlowService
+     * - CUSTOMER -> Customer flow (existing or registered)
+     * - null (unknown) -> Create new customer and start registration
      */
     @Transactional
     public void processIncomingMessage(WhatsAppWebhookDto.Value messageValue) {
@@ -54,44 +62,93 @@ public class CustomerFlowService {
 
         log.info("Processing message from: {}", fromWaId);
 
-        // Check if sender is a team member (Executive or Delivery Person)
-        Optional<TeamMember> teamMemberOpt = teamMemberRepository.findByWaPhoneNumber(fromWaId);
+        // Step 1: Lookup user role
+        UserLookupResult lookupResult = userRoleLookupService.lookupUserByWaPhoneNumber(fromWaId);
 
-        if (teamMemberOpt.isPresent()) {
-            TeamMember teamMember = teamMemberOpt.get();
+        // Step 2: Route based on role
+        if (lookupResult != null) {
+            // User exists in system - route based on role
+            switch (lookupResult.getRole()) {
+                case EXECUTIVE:
+                    // Route to Executive Flow
+                    TeamMember executive = lookupResult.asTeamMember();
+                    log.info("Routing to Executive Flow for: {}", executive.getName());
+                    executiveFlowService.handleExecutiveMessage(executive, message);
+                    return;
 
-            if (teamMember.getRole() == UserRole.EXECUTIVE) {
-                // Route to Executive Flow
-                log.info("Routing to Executive Flow for: {}", teamMember.getName());
-                executiveFlowService.handleExecutiveMessage(teamMember, message);
-                return;
-            } else if (teamMember.getRole() == UserRole.DELIVERY_PERSON) {
-                // Handle delivery person button replies (order confirmation)
-                if (message.getType().equals("interactive") &&
-                        message.getInteractive().getType().equals("button_reply")) {
-                    WhatsAppWebhookDto.ButtonReply buttonReply = message.getInteractive().getButtonReply();
-                    if (buttonReply.getId().startsWith("DELIVERY_TAKE_")) {
-                        Long orderId = Long.parseLong(buttonReply.getId().replace("DELIVERY_TAKE_", ""));
-                        handleDeliveryConfirmation(fromWaId, orderId);
-                        return;
+                case DELIVERY_PERSON:
+                    // Route to Delivery Flow
+                    TeamMember deliveryPerson = lookupResult.asTeamMember();
+                    log.info("Routing to Delivery Flow for: {}", deliveryPerson.getName());
+
+                    // Handle delivery person button replies (order confirmation)
+                    if (message.getType().equals("interactive") &&
+                            message.getInteractive().getType().equals("button_reply")) {
+                        WhatsAppWebhookDto.ButtonReply buttonReply = message.getInteractive().getButtonReply();
+                        if (buttonReply.getId().startsWith("DELIVERY_TAKE_")) {
+                            Long orderId = Long.parseLong(buttonReply.getId().replace("DELIVERY_TAKE_", ""));
+                            deliveryFlowService.handleDeliveryConfirmation(fromWaId, orderId);
+                            return;
+                        }
                     }
-                }
-                // For other messages from delivery persons, just acknowledge
-                whatsAppService.sendSimpleText(fromWaId,
-                        "Thank you! Please use the order confirmation buttons in the group.");
+                    // For other messages from delivery persons, just acknowledge
+                    whatsAppService.sendSimpleText(fromWaId,
+                            "Thank you! Please use the order confirmation buttons in the group.");
+                    return;
+
+                case CUSTOMER:
+                    // Route to Customer Flow
+                    Customer customer = lookupResult.asCustomer();
+                    log.info("Routing to Customer Flow for: {} (Stage: {})",
+                            customer.getName() != null ? customer.getName() : "Unknown",
+                            customer.getCurrentFlowStage());
+                    handleCustomerMessage(customer, message);
+                    return;
+
+                default:
+                    log.warn("Unknown role for user: {}", fromWaId);
+                    return;
+            }
+        } else {
+            // Unknown number - create new customer and start registration flow
+            log.info("Unknown number {} - creating new customer", fromWaId);
+            Customer newCustomer = Customer.builder()
+                    .waPhoneNumber(fromWaId)
+                    .currentFlowStage(CustomerFlowStage.NEW)
+                    .role(UserRole.CUSTOMER)
+                    .build();
+            newCustomer = customerRepository.save(newCustomer);
+
+            handleCustomerMessage(newCustomer, message);
+        }
+    }
+
+    /**
+     * Handle messages from customers (both new and existing)
+     */
+    private void handleCustomerMessage(Customer customer, WhatsAppWebhookDto.Message message) {
+        // Allow customer to restart flow from any stage by sending "start" or "hi"
+        if (message.getType().equals("text") && message.getText() != null) {
+            String text = message.getText().getBody().trim();
+            if (text.equalsIgnoreCase("start")) {
+                customer.setCurrentFlowStage(CustomerFlowStage.REGISTERED);
+                showProductCatalog(customer);
+                customerRepository.save(customer);
                 return;
+            } else if (text.equalsIgnoreCase("hi") || text.equalsIgnoreCase("hello")) {
+                // Reset to registered if already registered, otherwise treat as new customer
+                if (customer.getCurrentFlowStage() != CustomerFlowStage.NEW &&
+                        customer.getCurrentFlowStage() != CustomerFlowStage.AWAITING_NAME) {
+                    customer.setCurrentFlowStage(CustomerFlowStage.REGISTERED);
+                    whatsAppService.sendSimpleText(customer.getWaPhoneNumber(),
+                            "👋 *Hello " + customer.getName() + "!* 😊\n\n" +
+                                    "🐟 Ready to explore our fresh fish selection?\n\n" +
+                                    "Simply send *'start'* to browse our premium catch of the day! ✨");
+                    customerRepository.save(customer);
+                    return;
+                }
             }
         }
-
-        // If not a team member, treat as customer
-        Customer customer = customerRepository.findByWaPhoneNumber(fromWaId)
-                .orElseGet(() -> {
-                    Customer newCustomer = Customer.builder()
-                            .waPhoneNumber(fromWaId)
-                            .currentFlowStage(CustomerFlowStage.NEW)
-                            .build();
-                    return customerRepository.save(newCustomer);
-                });
 
         // Handle different message types for customers
         if (message.getType().equals("text") && message.getText() != null) {
@@ -145,11 +202,15 @@ public class CustomerFlowService {
     private void handleNewCustomer(Customer customer, String text) {
         if (text.trim().equalsIgnoreCase("hi") || text.trim().equalsIgnoreCase("hello")) {
             whatsAppService.sendSimpleText(customer.getWaPhoneNumber(),
-                    "Welcome to our Fresh Fish Store! 🐟\n\nWhat's your name?");
+                    "🙏 *Welcome to Our Fresh Fish Store!* 🐟\n\n" +
+                            "We're delighted to have you here! ✨\n\n" +
+                            "To serve you better, may I know your good name?");
             customer.setCurrentFlowStage(CustomerFlowStage.AWAITING_NAME);
         } else {
             whatsAppService.sendSimpleText(customer.getWaPhoneNumber(),
-                    "Hi! Welcome to our Fresh Fish Store! 🐟\n\nSend 'Hi' to get started.");
+                    "👋 *Hello! Welcome to Our Fresh Fish Store!* 🐟\n\n" +
+                            "We offer the freshest catch of the day, delivered right to your doorstep! 🚚\n\n" +
+                            "Please send *'Hi'* to get started with us. 😊");
         }
     }
 
@@ -159,7 +220,9 @@ public class CustomerFlowService {
     private void handleAwaitingName(Customer customer, String text) {
         customer.setName(text.trim());
         whatsAppService.sendSimpleText(customer.getWaPhoneNumber(),
-                "Nice to meet you, " + text.trim() + "! 👋\n\nPlease share your phone number.");
+                "🙏 *Nice to meet you, " + text.trim() + "!* 👋\n\n" +
+                        "Thank you for choosing us! We're excited to serve you the freshest fish. 🐟\n\n" +
+                        "Could you please share your contact number?");
         customer.setCurrentFlowStage(CustomerFlowStage.AWAITING_PHONE);
     }
 
@@ -169,8 +232,14 @@ public class CustomerFlowService {
     private void handleAwaitingPhone(Customer customer, String text) {
         customer.setPhoneNumber(text.trim());
         whatsAppService.sendSimpleText(customer.getWaPhoneNumber(),
-                "Great! Now please share your current location so we can check if we deliver to your area.\n\n" +
-                        "📍 Tap the attachment icon (📎) → Location → Send your current location");
+                "✅ *Perfect! Thank you!* 🙏\n\n" +
+                        "Now, to ensure we can deliver fresh fish to your doorstep, please share your location. 📍\n\n"
+                        +
+                        "📢 *How to share:*\n" +
+                        "• Tap the attachment icon (📎)\n" +
+                        "• Select 'Location'\n" +
+                        "• Send your current location\n\n" +
+                        "This helps us serve you better! 😊");
         customer.setCurrentFlowStage(CustomerFlowStage.AWAITING_LOCATION);
     }
 
@@ -198,16 +267,23 @@ public class CustomerFlowService {
             customer.setRegisteredAt(LocalDateTime.now());
 
             whatsAppService.sendSimpleText(customer.getWaPhoneNumber(),
-                    String.format("✅ Great! You're in our delivery area!\n\n" +
-                            "Distance from our store: %.2f km\n\n" +
-                            "You've been added to our customer list! 🎉\n\n" +
-                            "Send 'start' to see our latest fresh fish selection.", distance));
+                    String.format("✨ *Wonderful News, %s!* 🎉\n\n" +
+                            "✅ You're in our delivery zone! We're thrilled to serve you. 🙏\n" +
+                            "📍 Distance from our store: *%.2f km*\n\n" +
+                            "🐟 *Ready to explore our fresh catch?*\n" +
+                            "Simply send *'start'* to browse our premium selection of fresh fish!\n\n" +
+                            "💚 We promise the freshest quality, delivered with care!",
+                            customer.getName(), distance));
         } else {
             whatsAppService.sendSimpleText(customer.getWaPhoneNumber(),
-                    String.format("❌ Sorry, we cannot deliver to your location.\n\n" +
-                            "You're %.2f km away from us. " +
-                            "We currently deliver within 50 km radius only.\n\n" +
-                            "We hope to expand to your area soon! 🙏", distance));
+                    String.format("😔 *We're Sorry, %s!*\n\n" +
+                            "Unfortunately, your location is outside our current delivery area. 📍\n\n" +
+                            "📍 Distance from our store: *%.2f km*\n" +
+                            "🚚 Our delivery radius: *50 km*\n\n" +
+                            "💔 We'd love to serve you in the future!\n" +
+                            "We're constantly expanding our delivery zones. Please check back with us soon! 🙏\n\n" +
+                            "Thank you for your interest! ❤️",
+                            customer.getName(), distance));
             customer.setCurrentFlowStage(CustomerFlowStage.NEW);
         }
     }
@@ -220,7 +296,9 @@ public class CustomerFlowService {
             showProductCatalog(customer);
         } else {
             whatsAppService.sendSimpleText(customer.getWaPhoneNumber(),
-                    "Send 'start' to browse our fresh fish selection! 🐟");
+                    "👋 *Hello " + customer.getName() + "!* 😊\n\n" +
+                            "🐟 Ready to explore our fresh fish selection?\n\n" +
+                            "Simply send *'start'* to browse our premium catch of the day! ✨");
         }
     }
 
@@ -242,7 +320,12 @@ public class CustomerFlowService {
             }
 
             whatsAppService.sendSimpleText(customer.getWaPhoneNumber(),
-                    "Sorry, no fish available at the moment. Please check back later!");
+                    "😔 *We're Sorry, " + customer.getName() + "!*\n\n" +
+                            "We don't have any fresh fish available at this moment. 🐟\n\n" +
+                            "🕒 Our fresh stock arrives daily!\n" +
+                            "Please check back with us in a little while. We'll have the freshest catch ready for you! ✨\n\n"
+                            +
+                            "Thank you for your patience! 🙏");
             return;
         }
 
@@ -255,7 +338,11 @@ public class CustomerFlowService {
                 .collect(Collectors.toList());
 
         whatsAppService.sendInteractiveList(customer.getWaPhoneNumber(),
-                "🐟 Fresh Fish Available Today:\n\nSelect a fish to add to your cart:", rows);
+                "🐟 *Fresh Fish Available Today, " + customer.getName() + "!* ✨\n\n" +
+                        "🌊 Premium quality, freshly caught!\n" +
+                        "🚚 Delivered right to your doorstep!\n\n" +
+                        "Select a fish to add to your cart:",
+                rows);
 
         customer.setCurrentFlowStage(CustomerFlowStage.BROWSING);
     }
@@ -275,7 +362,9 @@ public class CustomerFlowService {
         Optional<FishProduct> fishOpt = fishProductRepository.findById(fishProductId);
         if (fishOpt.isEmpty()) {
             whatsAppService.sendSimpleText(customer.getWaPhoneNumber(),
-                    "Sorry, that fish is no longer available.");
+                    "😔 *Oops!*\n\n" +
+                            "Sorry, that fish is no longer available. 🐟\n\n" +
+                            "Please send *'start'* to see our current fresh selection! ✨");
             return;
         }
 
@@ -286,12 +375,16 @@ public class CustomerFlowService {
         customer.setCurrentFlowStage(CustomerFlowStage.AWAITING_QUANTITY);
 
         whatsAppService.sendSimpleText(customer.getWaPhoneNumber(),
-                String.format("You selected: %s (₹%.2f/kg)\n\nHow many KG do you need?",
-                        fish.getName(), fish.getPricePerKg()));
+                String.format("✅ *Great Choice, %s!* 🎉\n\n" +
+                        "🐟 You selected: *%s*\n" +
+                        "💰 Price: *₹%.2f per kg*\n\n" +
+                        "⚖️ How many kilograms would you like?\n" +
+                        "(Example: 2 or 2.5)",
+                        customer.getName(), fish.getName(), fish.getPricePerKg()));
     }
 
     /**
-     * 8. Handle quantity input and add to cart
+     * 8. Handle quantity input and add to cart or update existing item
      */
     private void handleAwaitingQuantity(Customer customer, String text) {
         try {
@@ -299,22 +392,38 @@ public class CustomerFlowService {
 
             if (quantity <= 0) {
                 whatsAppService.sendSimpleText(customer.getWaPhoneNumber(),
-                        "Please enter a valid quantity greater than 0.");
+                        "⚠️ *Invalid Quantity!*\n\n" +
+                                "Please enter a quantity greater than 0.\n" +
+                                "Example: 2 or 2.5 😊");
                 return;
             }
 
             Long fishProductId = customer.getTempSelectedProductId();
 
-            // Add to cart
-            shoppingCartService.addToCart(customer.getId(), fishProductId, quantity);
+            // Check if this is an edit or new add
+            List<CartItemDto> items = shoppingCartService.getCartItems(customer.getId());
+            boolean isEdit = items.stream()
+                    .anyMatch(i -> i.getFishProductId().equals(fishProductId));
 
-            // Show cart options
-            sendCartOptions(customer);
-            customer.setCurrentFlowStage(CustomerFlowStage.ADDING_TO_CART);
+            if (isEdit) {
+                // Update existing item
+                shoppingCartService.updateQuantity(customer.getId(), fishProductId, quantity);
+                whatsAppService.sendSimpleText(customer.getWaPhoneNumber(),
+                        "✅ *Perfect!* 🎉\n\n" +
+                                "Quantity updated successfully! ✨");
+                showCartSummary(customer);
+            } else {
+                // Add new item
+                shoppingCartService.addToCart(customer.getId(), fishProductId, quantity);
+                sendCartOptions(customer);
+                customer.setCurrentFlowStage(CustomerFlowStage.ADDING_TO_CART);
+            }
 
         } catch (NumberFormatException e) {
             whatsAppService.sendSimpleText(customer.getWaPhoneNumber(),
-                    "Please enter a valid number (e.g., 2 or 1.5)");
+                    "⚠️ *Oops! Invalid Input*\n\n" +
+                            "Please enter a valid number for quantity.\n" +
+                            "Examples: *2* or *1.5* or *3.5* 😊");
         }
     }
 
@@ -339,7 +448,10 @@ public class CustomerFlowService {
                         .build());
 
         whatsAppService.sendCartActionButtons(customer.getWaPhoneNumber(),
-                "✅ Added to cart!\n\nWhat would you like to do next?", buttons);
+                "✅ *Added to Cart Successfully!* 🎉\n\n" +
+                        "👍 Great choice, " + customer.getName() + "!\n\n" +
+                        "What would you like to do next?",
+                buttons);
     }
 
     /**
@@ -357,9 +469,22 @@ public class CustomerFlowService {
             showCartSummary(customer);
         } else if ("CONFIRM_ORDER".equals(buttonId)) {
             placeOrder(customer);
-        } else if (buttonId.startsWith("DELIVERY_TAKE_")) {
-            Long orderId = Long.parseLong(buttonId.replace("DELIVERY_TAKE_", ""));
-            handleDeliveryConfirmation(customer.getWaPhoneNumber(), orderId);
+        } else if ("CANCEL_ORDER".equals(buttonId)) {
+            handleCancelOrder(customer);
+        } else if ("EDIT_ORDER".equals(buttonId)) {
+            showEditOrderOptions(customer);
+        } else if ("EDIT_PRODUCT".equals(buttonId)) {
+            showProductEditOptions(customer);
+        } else if ("EDIT_QUANTITY".equals(buttonId)) {
+            showQuantityEditOptions(customer);
+        } else if ("BACK_TO_CHECKOUT".equals(buttonId)) {
+            showCartSummary(customer);
+        } else if ("REMOVE_ALL_ITEMS".equals(buttonId)) {
+            handleRemoveAllItems(customer);
+        } else if (buttonId.startsWith("REMOVE_ITEM_")) {
+            handleRemoveItem(customer, buttonId);
+        } else if (buttonId.startsWith("EDIT_QTY_")) {
+            handleEditQuantitySelection(customer, buttonId);
         }
     }
 
@@ -377,14 +502,14 @@ public class CustomerFlowService {
             return;
         }
 
-        StringBuilder summary = new StringBuilder("🛒 Your Cart:\n\n");
+        StringBuilder summary = new StringBuilder("🛒 *Your Cart Summary, " + customer.getName() + ":*\n\n");
         for (CartItemDto item : items) {
             summary.append(String.format("• %s - %.2f kg × ₹%.2f = ₹%.2f\n",
                     item.getFishName(), item.getQuantityKg(), item.getPricePerKg(), item.getSubtotal()));
         }
-        summary.append(String.format("\n💰 Total: ₹%.2f\n", total));
-        summary.append("💵 Payment: COD (Cash on Delivery)\n\n");
-        summary.append("Confirm your order?");
+        summary.append(String.format("\n💰 *Total Amount: ₹%.2f*\n", total));
+        summary.append("💵 *Payment: COD (Cash on Delivery)*\n\n");
+        summary.append("✅ Ready to confirm your order?");
 
         List<WhatsAppMessageDto.ButtonDto> buttons = List.of(
                 WhatsAppMessageDto.ButtonDto.builder()
@@ -392,6 +517,20 @@ public class CustomerFlowService {
                         .reply(WhatsAppMessageDto.ReplyDto.builder()
                                 .id("CONFIRM_ORDER")
                                 .title("Confirm Order")
+                                .build())
+                        .build(),
+                WhatsAppMessageDto.ButtonDto.builder()
+                        .type("reply")
+                        .reply(WhatsAppMessageDto.ReplyDto.builder()
+                                .id("EDIT_ORDER")
+                                .title("Edit Order")
+                                .build())
+                        .build(),
+                WhatsAppMessageDto.ButtonDto.builder()
+                        .type("reply")
+                        .reply(WhatsAppMessageDto.ReplyDto.builder()
+                                .id("CANCEL_ORDER")
+                                .title("Cancel Order")
                                 .build())
                         .build());
 
@@ -442,93 +581,268 @@ public class CustomerFlowService {
         whatsAppService.sendOrderConfirmation(customer.getWaPhoneNumber(), order.getId(), total);
 
         // Send to delivery group
-        sendOrderToDeliveryGroup(order, customer, items);
+        deliveryFlowService.sendOrderToDeliveryGroup(order, customer, items);
 
         customer.setCurrentFlowStage(CustomerFlowStage.REGISTERED);
     }
 
     /**
-     * 13. Send order to delivery group with confirm button
+     * Handle Cancel Order - Clear cart and reset to registered state
      */
-    private void sendOrderToDeliveryGroup(CustomerOrder order, Customer customer, List<CartItemDto> items) {
-        String groupId = whatsAppConfig.getDeliveryGroupId();
+    private void handleCancelOrder(Customer customer) {
+        // Clear shopping cart
+        shoppingCartService.clearCart(customer.getId());
 
-        if (groupId == null || groupId.isEmpty()) {
-            log.warn("Delivery group ID not configured!");
-            return;
-        }
+        // Reset flow stage
+        customer.setCurrentFlowStage(CustomerFlowStage.REGISTERED);
 
-        StringBuilder orderDetails = new StringBuilder();
-        orderDetails.append("🔔 NEW ORDER #").append(order.getId()).append("\n\n");
-        orderDetails.append("👤 Customer: ").append(customer.getName()).append("\n");
-        orderDetails.append("📞 Phone: ").append(customer.getPhoneNumber()).append("\n");
-        orderDetails.append("📍 Location: ")
-                .append(String.format("%.5f, %.5f", customer.getLocationLat(), customer.getLocationLon())).append("\n");
-        orderDetails.append("📏 Distance: ").append(String.format("%.2f km", customer.getDistanceFromBusinessKm()))
-                .append("\n\n");
-
-        orderDetails.append("🐟 Items:\n");
-        for (CartItemDto item : items) {
-            orderDetails.append(String.format("• %s - %.2f kg × ₹%.2f = ₹%.2f\n",
-                    item.getFishName(), item.getQuantityKg(), item.getPricePerKg(), item.getSubtotal()));
-        }
-
-        orderDetails.append(String.format("\n💰 Total: ₹%.2f\n", order.getTotalAmount()));
-        orderDetails.append("💵 Payment: COD\n");
-        orderDetails.append("⏰ Time: ").append(order.getOrderTime().toString()).append("\n\n");
-        orderDetails.append("Who is willing to take this order?");
-
-        whatsAppService.sendInteractiveOrderAlert(groupId, orderDetails.toString(), order.getId());
+        // Send confirmation
+        whatsAppService.sendSimpleText(customer.getWaPhoneNumber(),
+                "✅ *Order Cancelled, " + customer.getName() + "* 🙏\n\n" +
+                        "🗑️ Your cart has been cleared.\n\n" +
+                        "🐟 Whenever you're ready, send *'start'* to browse our fresh fish selection again! ✨");
     }
 
     /**
-     * 14. Handle delivery person confirmation
+     * Show Edit Order options menu
      */
-    @Transactional
-    public void handleDeliveryConfirmation(String teamMemberWaId, Long orderId) {
-        CustomerOrder order = customerOrderRepository.findById(orderId)
-                .orElseThrow(() -> new RuntimeException("Order not found: " + orderId));
+    private void showEditOrderOptions(Customer customer) {
+        List<WhatsAppMessageDto.ButtonDto> buttons = List.of(
+                WhatsAppMessageDto.ButtonDto.builder()
+                        .type("reply")
+                        .reply(WhatsAppMessageDto.ReplyDto.builder()
+                                .id("EDIT_PRODUCT")
+                                .title("Edit Product")
+                                .build())
+                        .build(),
+                WhatsAppMessageDto.ButtonDto.builder()
+                        .type("reply")
+                        .reply(WhatsAppMessageDto.ReplyDto.builder()
+                                .id("EDIT_QUANTITY")
+                                .title("Edit Quantity")
+                                .build())
+                        .build(),
+                WhatsAppMessageDto.ButtonDto.builder()
+                        .type("reply")
+                        .reply(WhatsAppMessageDto.ReplyDto.builder()
+                                .id("BACK_TO_CHECKOUT")
+                                .title("Back to Checkout")
+                                .build())
+                        .build());
 
-        if (order.getStatus() == OrderStatus.CONFIRMED) {
-            whatsAppService.sendSimpleText(teamMemberWaId,
-                    "This order has already been taken by " + order.getTeamMemberName());
+        whatsAppService.sendCartActionButtons(customer.getWaPhoneNumber(),
+                "📝 *Edit Your Order, " + customer.getName() + "!*\n\n" +
+                        "What would you like to modify?",
+                buttons);
+
+        customer.setCurrentFlowStage(CustomerFlowStage.EDITING_ORDER);
+    }
+
+    /**
+     * Show product edit options - allow removing products from cart
+     */
+    private void showProductEditOptions(Customer customer) {
+        List<CartItemDto> items = shoppingCartService.getCartItems(customer.getId());
+
+        if (items.isEmpty()) {
+            whatsAppService.sendSimpleText(customer.getWaPhoneNumber(),
+                    "Your cart is empty! Send 'start' to browse fish.");
+            customer.setCurrentFlowStage(CustomerFlowStage.REGISTERED);
             return;
         }
 
-        // Get or create team member (delivery person)
-        TeamMember teamMember = teamMemberRepository
-                .findByWaPhoneNumber(teamMemberWaId)
-                .orElseGet(() -> {
-                    TeamMember tm = TeamMember.builder()
-                            .waPhoneNumber(teamMemberWaId)
-                            .name("Delivery Person "
-                                    + teamMemberWaId.substring(0, Math.min(10, teamMemberWaId.length())))
-                            .role(UserRole.DELIVERY_PERSON)
-                            .build();
-                    return teamMemberRepository.save(tm);
-                });
+        if (items.size() == 1) {
+            // Single item - use buttons
+            CartItemDto item = items.get(0);
+            List<WhatsAppMessageDto.ButtonDto> buttons = List.of(
+                    WhatsAppMessageDto.ButtonDto.builder()
+                            .type("reply")
+                            .reply(WhatsAppMessageDto.ReplyDto.builder()
+                                    .id("REMOVE_ITEM_" + item.getFishProductId())
+                                    .title("Remove " + item.getFishName())
+                                    .build())
+                            .build(),
+                    WhatsAppMessageDto.ButtonDto.builder()
+                            .type("reply")
+                            .reply(WhatsAppMessageDto.ReplyDto.builder()
+                                    .id("BACK_TO_CHECKOUT")
+                                    .title("Back to Checkout")
+                                    .build())
+                            .build());
 
-        // Update order
-        order.setStatus(OrderStatus.CONFIRMED);
-        order.setTeamMemberId(teamMember.getId());
-        order.setTeamMemberWaId(teamMemberWaId);
-        order.setTeamMemberName(teamMember.getName());
-        order.setConfirmedAt(LocalDateTime.now());
-        customerOrderRepository.save(order);
+            whatsAppService.sendCartActionButtons(customer.getWaPhoneNumber(),
+                    String.format("🗑️ Remove Product\n\nCurrent cart:\n• %s - %.2f kg\n\nRemove this item?",
+                            item.getFishName(), item.getQuantityKg()),
+                    buttons);
+        } else {
+            // Multiple items - use interactive list with Remove All option
+            whatsAppService.sendSimpleText(customer.getWaPhoneNumber(),
+                    "🗑️ Remove Products\n\nSelect an option:");
 
-        // Notify customer
-        Customer customer = customerRepository.findById(order.getCustomerId())
-                .orElseThrow(() -> new RuntimeException("Customer not found"));
+            // Send list message (to be implemented in WhatsAppService)
+            sendProductRemovalList(customer, items);
+        }
 
-        whatsAppService.sendDeliveryAssignmentNotification(
-                customer.getWaPhoneNumber(),
-                teamMember.getName());
-
-        // Notify group
-        String groupId = whatsAppConfig.getDeliveryGroupId();
-        whatsAppService.sendSimpleText(groupId,
-                "✅ Order #" + orderId + " taken by " + teamMember.getName());
-
-        log.info("Order {} assigned to team member {}", orderId, teamMember.getName());
+        customer.setCurrentFlowStage(CustomerFlowStage.EDITING_PRODUCT);
     }
+
+    /**
+     * Send interactive list for product removal
+     */
+    private void sendProductRemovalList(Customer customer, List<CartItemDto> items) {
+        StringBuilder message = new StringBuilder("Current cart:\n");
+        for (CartItemDto item : items) {
+            message.append(String.format("• %s - %.2f kg × ₹%.2f = ₹%.2f\n",
+                    item.getFishName(), item.getQuantityKg(), item.getPricePerKg(), item.getSubtotal()));
+        }
+        message.append("\nSelect a product to remove or remove all:");
+
+        // For now, use buttons (we'll implement interactive list in WhatsAppService
+        // later)
+        List<WhatsAppMessageDto.ButtonDto> buttons = new java.util.ArrayList<>();
+
+        // Add Remove All as first button
+        buttons.add(WhatsAppMessageDto.ButtonDto.builder()
+                .type("reply")
+                .reply(WhatsAppMessageDto.ReplyDto.builder()
+                        .id("REMOVE_ALL_ITEMS")
+                        .title("🗑️ Remove All")
+                        .build())
+                .build());
+
+        // Add individual items (max 2 more buttons = 3 total)
+        for (int i = 0; i < Math.min(items.size(), 2); i++) {
+            CartItemDto item = items.get(i);
+            buttons.add(WhatsAppMessageDto.ButtonDto.builder()
+                    .type("reply")
+                    .reply(WhatsAppMessageDto.ReplyDto.builder()
+                            .id("REMOVE_ITEM_" + item.getFishProductId())
+                            .title("Remove " + item.getFishName())
+                            .build())
+                    .build());
+        }
+
+        whatsAppService.sendCartActionButtons(customer.getWaPhoneNumber(), message.toString(), buttons);
+    }
+
+    /**
+     * Show quantity edit options - allow editing quantities
+     */
+    private void showQuantityEditOptions(Customer customer) {
+        List<CartItemDto> items = shoppingCartService.getCartItems(customer.getId());
+
+        if (items.isEmpty()) {
+            whatsAppService.sendSimpleText(customer.getWaPhoneNumber(),
+                    "Your cart is empty! Send 'start' to browse fish.");
+            customer.setCurrentFlowStage(CustomerFlowStage.REGISTERED);
+            return;
+        }
+
+        if (items.size() == 1) {
+            // Single item - go directly to quantity input
+            CartItemDto item = items.get(0);
+            customer.setTempSelectedProductId(item.getFishProductId());
+
+            whatsAppService.sendSimpleText(customer.getWaPhoneNumber(),
+                    String.format("Current quantity for %s: %.2f kg\n\n" +
+                            "Enter new quantity (in kg):",
+                            item.getFishName(), item.getQuantityKg()));
+
+            customer.setCurrentFlowStage(CustomerFlowStage.AWAITING_QUANTITY);
+        } else {
+            // Multiple items - show buttons to select which product
+            List<WhatsAppMessageDto.ButtonDto> buttons = new java.util.ArrayList<>();
+            for (int i = 0; i < Math.min(items.size(), 3); i++) {
+                CartItemDto item = items.get(i);
+                buttons.add(WhatsAppMessageDto.ButtonDto.builder()
+                        .type("reply")
+                        .reply(WhatsAppMessageDto.ReplyDto.builder()
+                                .id("EDIT_QTY_" + item.getFishProductId())
+                                .title("Edit " + item.getFishName())
+                                .build())
+                        .build());
+            }
+
+            StringBuilder message = new StringBuilder("✏️ Edit Quantities\n\n");
+            message.append("Current cart:\n");
+            for (CartItemDto item : items) {
+                message.append(String.format("• %s - %.2f kg\n",
+                        item.getFishName(), item.getQuantityKg()));
+            }
+            message.append("\nSelect a product to edit quantity:");
+
+            whatsAppService.sendCartActionButtons(customer.getWaPhoneNumber(),
+                    message.toString(), buttons);
+
+            customer.setCurrentFlowStage(CustomerFlowStage.EDITING_QUANTITY);
+        }
+    }
+
+    /**
+     * Handle removing all items from cart
+     */
+    private void handleRemoveAllItems(Customer customer) {
+        // Clear entire cart
+        shoppingCartService.clearCart(customer.getId());
+
+        whatsAppService.sendSimpleText(customer.getWaPhoneNumber(),
+                "✅ *All Products Removed!* 🙏\n\n" +
+                        "🛝️ Your cart is now empty, " + customer.getName() + ".\n\n" +
+                        "🐟 Here are our fresh fish available today:");
+        showProductCatalog(customer);
+    }
+
+    /**
+     * Handle removing an item from cart
+     */
+    private void handleRemoveItem(Customer customer, String buttonId) {
+        Long fishProductId = Long.parseLong(buttonId.replace("REMOVE_ITEM_", ""));
+
+        // Remove item from cart
+        shoppingCartService.removeFromCart(customer.getId(), fishProductId);
+
+        whatsAppService.sendSimpleText(customer.getWaPhoneNumber(),
+                "✅ *Product Removed Successfully!* 👍\n\n" +
+                        "Item has been removed from your cart. ✨");
+
+        // Check if cart is now empty
+        List<CartItemDto> remainingItems = shoppingCartService.getCartItems(customer.getId());
+
+        if (remainingItems.isEmpty()) {
+            // Cart is empty - show product catalog directly
+            whatsAppService.sendSimpleText(customer.getWaPhoneNumber(),
+                    "Your cart is now empty. Here are our available products:");
+            showProductCatalog(customer);
+        } else {
+            // Show updated cart summary
+            showCartSummary(customer);
+        }
+    }
+
+    /**
+     * Handle selecting a product to edit quantity
+     */
+    private void handleEditQuantitySelection(Customer customer, String buttonId) {
+        Long fishProductId = Long.parseLong(buttonId.replace("EDIT_QTY_", ""));
+
+        // Store the product ID for quantity update
+        customer.setTempSelectedProductId(fishProductId);
+
+        // Get current quantity
+        List<CartItemDto> items = shoppingCartService.getCartItems(customer.getId());
+        CartItemDto item = items.stream()
+                .filter(i -> i.getFishProductId().equals(fishProductId))
+                .findFirst()
+                .orElse(null);
+
+        if (item != null) {
+            whatsAppService.sendSimpleText(customer.getWaPhoneNumber(),
+                    String.format("Current quantity for %s: %.2f kg\n\n" +
+                            "Enter new quantity (in kg):",
+                            item.getFishName(), item.getQuantityKg()));
+
+            customer.setCurrentFlowStage(CustomerFlowStage.AWAITING_QUANTITY);
+        }
+    }
+
 }

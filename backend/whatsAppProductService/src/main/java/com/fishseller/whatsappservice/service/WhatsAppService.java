@@ -8,6 +8,8 @@ import org.springframework.http.MediaType;
 import org.springframework.stereotype.Service;
 import org.springframework.web.client.RestClient;
 
+import java.time.LocalDateTime;
+import java.time.format.DateTimeFormatter;
 import java.util.List;
 
 @Service
@@ -151,6 +153,39 @@ public class WhatsAppService {
                                 "Send 'start' to see the daily fresh fish details and continue. 🐟";
 
                 sendSimpleText(customerWaId, message);
+        }
+
+        /**
+         * Send unauthorized delivery person message
+         */
+        public void sendUnauthorizedDeliveryMessage(String toWaId) {
+                String message = "❌ Unauthorized Access\n\n" +
+                                "You are not registered as a delivery person.\n" +
+                                "Only authorized delivery personnel can confirm orders.\n\n" +
+                                "Please contact the admin if you believe this is an error.";
+
+                sendSimpleText(toWaId, message);
+        }
+
+        /**
+         * Send enhanced delivery confirmation to group
+         */
+        public void sendDeliveryConfirmationToGroup(String groupId, Long orderId,
+                        String deliveryPersonName, String deliveryPersonPhone, LocalDateTime confirmedAt) {
+
+                String formattedTime = confirmedAt.format(DateTimeFormatter.ofPattern("hh:mm a"));
+
+                String message = String.format(
+                                "✅ ORDER CONFIRMED\n\n" +
+                                                "📦 Order #%d has been assigned!\n\n" +
+                                                "🚴 Delivery Person:\n" +
+                                                "   👤 Name: %s\n" +
+                                                "   📞 Phone: %s\n\n" +
+                                                "⏰ Confirmed at: %s\n\n" +
+                                                "The customer will be notified shortly.",
+                                orderId, deliveryPersonName, deliveryPersonPhone, formattedTime);
+
+                sendSimpleText(groupId, message);
         }
 
         private void sendToMeta(WhatsAppMessageDto message) {

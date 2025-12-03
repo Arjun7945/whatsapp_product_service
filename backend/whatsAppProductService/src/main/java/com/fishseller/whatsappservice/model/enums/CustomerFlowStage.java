@@ -13,5 +13,8 @@ public enum CustomerFlowStage {
     ADDING_TO_CART, // Adding products to cart
     AWAITING_QUANTITY, // Asked for quantity of selected product
     CHECKOUT, // Reviewing cart before order
-    CONFIRMING_ORDER // Final confirmation stage
+    CONFIRMING_ORDER, // Final confirmation stage
+    EDITING_ORDER, // User selected "Edit Order" - showing edit options
+    EDITING_PRODUCT, // User is editing/removing products from cart
+    EDITING_QUANTITY // User is editing quantities of cart items
 }

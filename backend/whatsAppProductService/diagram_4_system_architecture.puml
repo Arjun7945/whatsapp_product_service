@@ -1,0 +1,62 @@
+@startuml
+!theme plain
+skinparam backgroundColor white
+skinparam defaultFontName Arial
+
+package "📱 CLIENTS" {
+  actor "Customer\nWhatsApp" as customer #2196F3
+  actor "Executive\nWhatsApp" as executive #00BCD4
+  actor "Delivery Person\nWhatsApp" as delivery #FF9800
+}
+
+cloud "☁️ WHATSAPP BUSINESS API" {
+  component "WhatsApp Cloud API\ngraph.facebook.com" as wapi #25D366
+}
+
+package "⚙️ SPRING BOOT BACKEND" {
+  component "WebhookController" as controller #673AB7
+  
+  package "Services Layer" {
+    component "CustomerFlowService" as cfs #3F51B5
+    component "ExecutiveFlowService" as efs #00BCD4
+    component "DeliveryFlowService\n⭐ NEW" as dfs #4CAF50
+    component "WhatsAppService" as was #9C27B0
+    component "ShoppingCartService" as scs #7B1FA2
+    component "LocationValidationService" as lvs #6A1B9A
+  }
+  
+  package "Repository Layer" {
+    database "JPA Repositories" as repos #FF6F00
+  }
+}
+
+database "🗄️ PostgreSQL\nfishdb" as db #F57C00
+
+customer <--> wapi : Messages
+executive <--> wapi : Messages
+delivery <--> wapi : Messages
+
+wapi <--> controller : Webhooks
+
+controller --> cfs
+controller --> efs
+controller --> dfs
+
+cfs --> was
+cfs --> scs
+cfs --> lvs
+cfs --> dfs
+
+efs --> was
+dfs --> was
+
+cfs --> repos
+efs --> repos
+dfs --> repos
+scs --> repos
+
+repos <--> db
+
+was --> wapi : Send Messages
+
+@enduml

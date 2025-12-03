@@ -98,6 +98,26 @@ public class ShoppingCartService {
     }
 
     /**
+     * Update quantity of an existing cart item
+     */
+    @Transactional
+    public void updateQuantity(Long customerId, Long fishProductId, Double newQuantity) {
+        ShoppingCart cart = shoppingCartRepository.findByCustomerId(customerId)
+                .orElseThrow(() -> new RuntimeException("Cart not found for customer " + customerId));
+
+        CartItem item = cartItemRepository.findByCartIdAndFishProductId(cart.getId(), fishProductId)
+                .orElseThrow(() -> new RuntimeException("Item not found in cart"));
+
+        item.setQuantityKg(newQuantity);
+        cartItemRepository.save(item);
+
+        cart.setUpdatedAt(LocalDateTime.now());
+        shoppingCartRepository.save(cart);
+
+        log.info("Updated quantity for product {} in cart to {} kg", fishProductId, newQuantity);
+    }
+
+    /**
      * Get cart items with product details
      */
     @Transactional(readOnly = true)
