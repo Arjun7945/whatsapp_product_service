@@ -371,39 +371,50 @@ public class CustomerFlowService {
     }
 
     /**
-     * 7. Handle product selection from list
+     * 7. Handle product selection from list and cart editing operations
      */
     private void handleListReply(Customer customer, WhatsAppWebhookDto.ListReply listReply) {
-        String selectedId = listReply.getId(); // e.g., "FISH_123"
+        String selectedId = listReply.getId(); // e.g., "FISH_123", "REMOVE_ITEM_123", "EDIT_QTY_123"
 
-        if (!selectedId.startsWith("FISH_")) {
-            return;
-        }
+        // Handle product catalog selection
+        if (selectedId.startsWith("FISH_")) {
+            Long fishProductId = Long.parseLong(selectedId.replace("FISH_", ""));
 
-        Long fishProductId = Long.parseLong(selectedId.replace("FISH_", ""));
+            Optional<FishProduct> fishOpt = fishProductRepository.findById(fishProductId);
+            if (fishOpt.isEmpty()) {
+                whatsAppService.sendSimpleText(customer.getWaPhoneNumber(),
+                        "😔 *Oops!*\n\n" +
+                                "Sorry, that fish is no longer available. 🐟\n\n" +
+                                "Please send *'start'* to see our current fresh selection! ✨");
+                return;
+            }
 
-        Optional<FishProduct> fishOpt = fishProductRepository.findById(fishProductId);
-        if (fishOpt.isEmpty()) {
+            FishProduct fish = fishOpt.get();
+
+            // Store selected product temporarily
+            customer.setTempSelectedProductId(fishProductId);
+            customer.setCurrentFlowStage(CustomerFlowStage.AWAITING_QUANTITY);
+
             whatsAppService.sendSimpleText(customer.getWaPhoneNumber(),
-                    "😔 *Oops!*\n\n" +
-                            "Sorry, that fish is no longer available. 🐟\n\n" +
-                            "Please send *'start'* to see our current fresh selection! ✨");
-            return;
+                    String.format("✅ *Great Choice, %s!* 🎉\n\n" +
+                            "🐟 You selected: *%s*\n" +
+                            "💰 Price: *₹%.2f per kg*\n\n" +
+                            "⚖️ How many kilograms would you like?\n" +
+                            "(Example: 2 or 2.5)",
+                            customer.getName(), fish.getName(), fish.getPricePerKg()));
         }
-
-        FishProduct fish = fishOpt.get();
-
-        // Store selected product temporarily
-        customer.setTempSelectedProductId(fishProductId);
-        customer.setCurrentFlowStage(CustomerFlowStage.AWAITING_QUANTITY);
-
-        whatsAppService.sendSimpleText(customer.getWaPhoneNumber(),
-                String.format("✅ *Great Choice, %s!* 🎉\n\n" +
-                        "🐟 You selected: *%s*\n" +
-                        "💰 Price: *₹%.2f per kg*\n\n" +
-                        "⚖️ How many kilograms would you like?\n" +
-                        "(Example: 2 or 2.5)",
-                        customer.getName(), fish.getName(), fish.getPricePerKg()));
+        // Handle remove item from cart
+        else if (selectedId.startsWith("REMOVE_ITEM_")) {
+            handleRemoveItem(customer, selectedId);
+        }
+        // Handle remove all items from cart
+        else if (selectedId.equals("REMOVE_ALL_ITEMS")) {
+            handleRemoveAllItems(customer);
+        }
+        // Handle edit quantity selection
+        else if (selectedId.startsWith("EDIT_QTY_")) {
+            handleEditQuantitySelection(customer, selectedId);
+        }
     }
 
     /**
@@ -663,6 +674,7 @@ public class CustomerFlowService {
 
     /**
      * Show product edit options - allow removing products from cart
+     * Shows ONLY the products that are currently in the customer's cart
      */
     private void showProductEditOptions(Customer customer) {
         List<CartItemDto> items = shoppingCartService.getCartItems(customer.getId());
@@ -694,15 +706,11 @@ public class CustomerFlowService {
                             .build());
 
             whatsAppService.sendCartActionButtons(customer.getWaPhoneNumber(),
-                    String.format("🗑️ Remove Product\n\nCurrent cart:\n• %s - %.2f kg\n\nRemove this item?",
+                    String.format("🗑️ *Remove Product*\n\n*Current cart:*\n• %s - %.2f kg\n\nRemove this item?",
                             item.getFishName(), item.getQuantityKg()),
                     buttons);
         } else {
-            // Multiple items - use interactive list with Remove All option
-            whatsAppService.sendSimpleText(customer.getWaPhoneNumber(),
-                    "🗑️ Remove Products\n\nSelect an option:");
-
-            // Send list message (to be implemented in WhatsAppService)
+            // Multiple items - use interactive list to show ALL cart items
             sendProductRemovalList(customer, items);
         }
 
@@ -711,45 +719,42 @@ public class CustomerFlowService {
 
     /**
      * Send interactive list for product removal
+     * Shows ALL products currently in the cart (not limited to 2-3 items)
      */
     private void sendProductRemovalList(Customer customer, List<CartItemDto> items) {
-        StringBuilder message = new StringBuilder("Current cart:\n");
+        StringBuilder message = new StringBuilder("🗑️ *Remove Products*\n\n*Current cart:*\n");
         for (CartItemDto item : items) {
             message.append(String.format("• %s - %.2f kg × ₹%.2f = ₹%.2f\n",
                     item.getFishName(), item.getQuantityKg(), item.getPricePerKg(), item.getSubtotal()));
         }
-        message.append("\nSelect a product to remove or remove all:");
+        message.append("\nSelect a product to remove:");
 
-        // For now, use buttons (we'll implement interactive list in WhatsAppService
-        // later)
-        List<WhatsAppMessageDto.ButtonDto> buttons = new java.util.ArrayList<>();
+        // Create rows for ALL cart items (not limited by button count)
+        List<WhatsAppMessageDto.RowDto> rows = new java.util.ArrayList<>();
 
-        // Add Remove All as first button
-        buttons.add(WhatsAppMessageDto.ButtonDto.builder()
-                .type("reply")
-                .reply(WhatsAppMessageDto.ReplyDto.builder()
-                        .id("REMOVE_ALL_ITEMS")
-                        .title("🗑️ Remove All")
-                        .build())
+        // Add "Remove All" option as first row
+        rows.add(WhatsAppMessageDto.RowDto.builder()
+                .id("REMOVE_ALL_ITEMS")
+                .title("🗑️ Remove All Items")
+                .description("Clear entire cart")
                 .build());
 
-        // Add individual items (max 2 more buttons = 3 total)
-        for (int i = 0; i < Math.min(items.size(), 2); i++) {
-            CartItemDto item = items.get(i);
-            buttons.add(WhatsAppMessageDto.ButtonDto.builder()
-                    .type("reply")
-                    .reply(WhatsAppMessageDto.ReplyDto.builder()
-                            .id("REMOVE_ITEM_" + item.getFishProductId())
-                            .title("Remove " + item.getFishName())
-                            .build())
+        // Add individual cart items
+        for (CartItemDto item : items) {
+            rows.add(WhatsAppMessageDto.RowDto.builder()
+                    .id("REMOVE_ITEM_" + item.getFishProductId())
+                    .title(item.getFishName())
+                    .description(String.format("%.2f kg - ₹%.2f", item.getQuantityKg(), item.getSubtotal()))
                     .build());
         }
 
-        whatsAppService.sendCartActionButtons(customer.getWaPhoneNumber(), message.toString(), buttons);
+        // Send interactive list with all cart items
+        whatsAppService.sendInteractiveList(customer.getWaPhoneNumber(), message.toString(), rows);
     }
 
     /**
      * Show quantity edit options - allow editing quantities
+     * Shows ONLY the products that are currently in the customer's cart
      */
     private void showQuantityEditOptions(Customer customer) {
         List<CartItemDto> items = shoppingCartService.getCartItems(customer.getId());
@@ -767,35 +772,32 @@ public class CustomerFlowService {
             customer.setTempSelectedProductId(item.getFishProductId());
 
             whatsAppService.sendSimpleText(customer.getWaPhoneNumber(),
-                    String.format("Current quantity for %s: %.2f kg\n\n" +
+                    String.format("*Current quantity for %s:* %.2f kg\n\n" +
                             "Enter new quantity (in kg):",
                             item.getFishName(), item.getQuantityKg()));
 
             customer.setCurrentFlowStage(CustomerFlowStage.AWAITING_QUANTITY);
         } else {
-            // Multiple items - show buttons to select which product
-            List<WhatsAppMessageDto.ButtonDto> buttons = new java.util.ArrayList<>();
-            for (int i = 0; i < Math.min(items.size(), 3); i++) {
-                CartItemDto item = items.get(i);
-                buttons.add(WhatsAppMessageDto.ButtonDto.builder()
-                        .type("reply")
-                        .reply(WhatsAppMessageDto.ReplyDto.builder()
-                                .id("EDIT_QTY_" + item.getFishProductId())
-                                .title("Edit " + item.getFishName())
-                                .build())
-                        .build());
-            }
-
-            StringBuilder message = new StringBuilder("✏️ Edit Quantities\n\n");
-            message.append("Current cart:\n");
+            // Multiple items - use interactive list to show ALL cart items
+            StringBuilder message = new StringBuilder("✏️ *Edit Quantities*\n\n*Current cart:*\n");
             for (CartItemDto item : items) {
                 message.append(String.format("• %s - %.2f kg\n",
                         item.getFishName(), item.getQuantityKg()));
             }
             message.append("\nSelect a product to edit quantity:");
 
-            whatsAppService.sendCartActionButtons(customer.getWaPhoneNumber(),
-                    message.toString(), buttons);
+            // Create rows for ALL cart items
+            List<WhatsAppMessageDto.RowDto> rows = new java.util.ArrayList<>();
+            for (CartItemDto item : items) {
+                rows.add(WhatsAppMessageDto.RowDto.builder()
+                        .id("EDIT_QTY_" + item.getFishProductId())
+                        .title(item.getFishName())
+                        .description(String.format("Current: %.2f kg", item.getQuantityKg()))
+                        .build());
+            }
+
+            // Send interactive list with all cart items
+            whatsAppService.sendInteractiveList(customer.getWaPhoneNumber(), message.toString(), rows);
 
             customer.setCurrentFlowStage(CustomerFlowStage.EDITING_QUANTITY);
         }
