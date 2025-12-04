@@ -19,6 +19,7 @@ public class WhatsAppService {
 
         private final WhatsAppConfig whatsAppConfig;
         private final RestClient.Builder restClientBuilder;
+        private final CustomerMessageService messageService;
 
         private RestClient getRestClient() {
                 return restClientBuilder
@@ -117,16 +118,7 @@ public class WhatsAppService {
          * Send order confirmation to customer
          */
         public void sendOrderConfirmation(String toWaId, Long orderId, Double total) {
-                String message = String.format(
-                                "🎉 *Order Confirmed!* 🐟\n\n" +
-                                                "Order #%d\n" +
-                                                "💰 *Total:* ₹%.2f\n" +
-                                                "💳 *Payment:* COD (Cash on Delivery)\n\n" +
-                                                "Your order has been sent to our delivery team. 🚀\n" +
-                                                "You'll be notified as soon as a delivery person is assigned.\n\n" +
-                                                "Thank you for choosing us! 🌊",
-                                orderId, total);
-
+                String message = messageService.getOrderConfirmation(String.valueOf(orderId), total);
                 sendSimpleText(toWaId, message);
         }
 
@@ -136,14 +128,8 @@ public class WhatsAppService {
          */
         public void sendDeliveryAssignmentNotification(String customerWaId, String deliveryPersonName,
                         String deliveryPersonWaPhone) {
-                String message = String.format(
-                                "🎉 *Order Confirmed!* 🚀\n\n" +
-                                                "Your order has been taken by our delivery person!\n\n" +
-                                                "👤 *Delivery Person:* %s\n" +
-                                                "📞 *WhatsApp:* %s\n\n" +
-                                                "They will contact you shortly for delivery. 📦",
-                                deliveryPersonName, deliveryPersonWaPhone);
-
+                String message = messageService.getDeliveryAssignmentNotification(deliveryPersonName,
+                                deliveryPersonWaPhone);
                 sendSimpleText(customerWaId, message);
         }
 
@@ -152,15 +138,8 @@ public class WhatsAppService {
          */
         public void sendCustomerWelcomeMessage(String customerWaId, String customerName, String customerPhone,
                         String executiveName, String executiveWaPhone) {
-                String message = String.format(
-                                "🎉 *Welcome to our Fresh Fish Store!* 🐟\n\n" +
-                                                "Hello *%s*! 👋\n" +
-                                                "Phone: %s\n\n" +
-                                                "You have been added to our customer list by *%s* (📞 %s).\n\n" +
-                                                "Get ready to start ordering fresh fish daily! 🌊\n\n" +
-                                                "Send 'start' to see the daily fresh fish details and continue. 🚀",
-                                customerName, customerPhone, executiveName, executiveWaPhone);
-
+                String message = messageService.getCustomerWelcomeByExecutive(customerName, customerPhone,
+                                executiveName, executiveWaPhone);
                 sendSimpleText(customerWaId, message);
         }
 
