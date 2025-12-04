@@ -20,6 +20,7 @@ public class WhatsAppService {
         private final WhatsAppConfig whatsAppConfig;
         private final RestClient.Builder restClientBuilder;
         private final CustomerMessageService messageService;
+        private final DeliveryPersonMessageService deliveryMessageService;
 
         private RestClient getRestClient() {
                 return restClientBuilder
@@ -166,11 +167,7 @@ public class WhatsAppService {
          * Send unauthorized delivery person message
          */
         public void sendUnauthorizedDeliveryMessage(String toWaId) {
-                String message = "❌ *Unauthorized Access*\n\n" +
-                                "You are not registered as a delivery person. 🚫\n" +
-                                "Only authorized delivery personnel can confirm orders.\n\n" +
-                                "Please contact the admin if you believe this is an error. 📞";
-
+                String message = deliveryMessageService.getUnauthorizedDeliveryMessage();
                 sendSimpleText(toWaId, message);
         }
 
@@ -181,15 +178,7 @@ public class WhatsAppService {
                         String deliveryPersonName, String deliveryPersonPhone, LocalDateTime confirmedAt) {
 
                 String formattedTime = confirmedAt.format(DateTimeFormatter.ofPattern("hh:mm a"));
-
-                String message = String.format(
-                                "✅ *ORDER ASSIGNED* 🚀\n\n" +
-                                                "📦 *Order #%d* has been taken!\n\n" +
-                                                "🚴 *Delivery Person:*\n" +
-                                                "   👤 Name: *%s*\n" +
-                                                "   📞 Phone: %s\n\n" +
-                                                "⏰ Confirmed at: %s\n\n" +
-                                                "The customer will be notified shortly. Great job! 👏",
+                String message = deliveryMessageService.getDeliveryConfirmationToGroup(
                                 orderId, deliveryPersonName, deliveryPersonPhone, formattedTime);
 
                 sendSimpleText(groupId, message);

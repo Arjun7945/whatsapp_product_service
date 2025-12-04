@@ -30,6 +30,7 @@ public class DeliveryFlowService {
         private final CustomerOrderRepository customerOrderRepository;
         private final CustomerRepository customerRepository;
         private final WhatsAppService whatsAppService;
+        private final DeliveryPersonMessageService messageService;
 
         /**
          * Send order notification to all active delivery persons individually
@@ -45,28 +46,29 @@ public class DeliveryFlowService {
                 }
 
                 StringBuilder orderDetails = new StringBuilder();
-                orderDetails.append("🔔 NEW ORDER #").append(order.getId()).append("\n\n");
-                orderDetails.append("👤 Customer: ").append(customer.getName()).append("\n");
-                orderDetails.append("📞 Phone: ").append(customer.getPhoneNumber()).append("\n");
-                orderDetails.append("📍 Location: ")
-                                .append(String.format("%.5f, %.5f", customer.getLocationLat(),
-                                                customer.getLocationLon()))
-                                .append("\n");
-                orderDetails.append("📏 Distance: ")
-                                .append(String.format("%.2f km", customer.getDistanceFromBusinessKm()))
-                                .append("\n\n");
+                orderDetails.append(messageService.getOrderNotificationHeader(order.getId()));
+                orderDetails.append(messageService.getCustomerDetails(customer.getName(), customer.getPhoneNumber()));
 
-                orderDetails.append("🐟 Items:\n");
+                // Always add location details, send "null" as string if data is not available
+                String lat = customer.getLocationLat() != null ? String.format("%.5f", customer.getLocationLat())
+                                : "null";
+                String lon = customer.getLocationLon() != null ? String.format("%.5f", customer.getLocationLon())
+                                : "null";
+                String distance = customer.getDistanceFromBusinessKm() != null
+                                ? String.format("%.2f", customer.getDistanceFromBusinessKm())
+                                : "null";
+
+                orderDetails.append(messageService.getLocationDetails(lat, lon, distance));
+
+                orderDetails.append(messageService.getItemsHeader());
                 for (CartItemDto item : items) {
                         orderDetails.append(String.format("• %s - %.2f kg × ₹%.2f = ₹%.2f\n",
                                         item.getFishName(), item.getQuantityKg(), item.getPricePerKg(),
                                         item.getSubtotal()));
                 }
 
-                orderDetails.append(String.format("\n💰 *Total:* ₹%.2f\n", order.getTotalAmount()));
-                orderDetails.append("💵 *Payment:* COD\n");
-                orderDetails.append("⏰ *Time:* ").append(order.getOrderTime().toString()).append("\n\n");
-                orderDetails.append("Who is willing to take this order? 🚀");
+                orderDetails.append(messageService.getOrderFooter(order.getTotalAmount(),
+                                order.getOrderTime().toString()));
 
                 // Send to each delivery person individually
                 for (TeamMember deliveryPerson : deliveryPersons) {
@@ -93,8 +95,7 @@ public class DeliveryFlowService {
                 // 2. Check if order already confirmed
                 if (order.getStatus() == OrderStatus.CONFIRMED) {
                         whatsAppService.sendSimpleText(deliveryPersonWaId,
-                                        "⚠️ *Order Taken!* \n\nThis order has already been taken by *"
-                                                        + order.getTeamMemberName() + "*. Better luck next time! ⚡");
+                                        messageService.getOrderAlreadyTaken(order.getTeamMemberName()));
                         return;
                 }
 
@@ -138,11 +139,8 @@ public class DeliveryFlowService {
 
                 // 6. Notify delivery person of successful confirmation
                 whatsAppService.sendSimpleText(deliveryPersonWaId,
-                                "✅ *Order Confirmed!* 🎉\n\n" +
-                                                "You have successfully taken Order #" + orderId + ".\n" +
-                                                "Customer: " + customer.getName() + "\n" +
-                                                "Phone: " + customer.getPhoneNumber() + "\n\n" +
-                                                "Good luck with the delivery! 🚀");
+                                messageService.getOrderConfirmationSuccess(orderId, customer.getName(),
+                                                customer.getPhoneNumber()));
 
                 log.info("Order {} assigned to delivery person {} ({})",
                                 orderId, teamMember.getName(), teamMember.getPhoneNumber());

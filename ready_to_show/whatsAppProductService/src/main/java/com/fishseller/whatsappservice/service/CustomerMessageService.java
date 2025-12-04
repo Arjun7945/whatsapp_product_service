@@ -445,15 +445,6 @@ public class CustomerMessageService {
                 "ഒരു ഓപ്ഷൻ തിരഞ്ഞെടുക്കുക:";
     }
 
-    /**
-     * Delivery person acknowledgment (for non-button messages)
-     * 
-     * @return Delivery person acknowledgment in Malayalam
-     */
-    public String getDeliveryPersonAcknowledgment() {
-        return "നന്ദി! ഗ്രൂപ്പിലെ ഓർഡർ സ്ഥിരീകരണ ബട്ടണുകൾ ഉപയോഗിക്കുക.";
-    }
-
     // ========================================
     // CATEGORY 7: EXECUTIVE WELCOME MESSAGE (1 message)
     // ========================================

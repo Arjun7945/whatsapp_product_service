@@ -40,6 +40,7 @@ public class CustomerFlowService {
     private final AdminFlowService adminFlowService;
     private final DeveloperFlowService developerFlowService;
     private final CustomerMessageService messageService;
+    private final DeliveryPersonMessageService deliveryMessageService;
 
     /**
      * Main entry point for processing incoming WhatsApp messages
@@ -117,7 +118,7 @@ public class CustomerFlowService {
                     }
                     // For other messages from delivery persons, just acknowledge
                     whatsAppService.sendSimpleText(fromWaId,
-                            messageService.getDeliveryPersonAcknowledgment());
+                            deliveryMessageService.getDeliveryPersonAcknowledgment());
                     return;
 
                 case CUSTOMER:
