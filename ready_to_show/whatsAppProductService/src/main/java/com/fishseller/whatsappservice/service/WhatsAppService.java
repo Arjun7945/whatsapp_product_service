@@ -60,7 +60,8 @@ public class WhatsAppService {
                                                                                                                 .builder()
                                                                                                                 .id("DELIVERY_TAKE_"
                                                                                                                                 + orderId)
-                                                                                                                .title("✅ Accept Order")
+                                                                                                                .title(messageService
+                                                                                                                                .getButtonAcceptOrder())
                                                                                                                 .build())
                                                                                                 .build()))
                                                                 .build())
@@ -80,10 +81,11 @@ public class WhatsAppService {
                                                                 .text(bodyText)
                                                                 .build())
                                                 .action(WhatsAppMessageDto.ActionDto.builder()
-                                                                .button("View Fish")
+                                                                .button(messageService.getButtonViewFish())
                                                                 .sections(List.of(
                                                                                 WhatsAppMessageDto.SectionDto.builder()
-                                                                                                .title("Available Fish")
+                                                                                                .title(messageService
+                                                                                                                .getSectionTitleAvailableFish())
                                                                                                 .rows(rows)
                                                                                                 .build()))
                                                                 .build())

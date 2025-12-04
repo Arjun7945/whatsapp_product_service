@@ -572,4 +572,31 @@ public class CustomerMessageService {
     public String getButtonRemoveProduct(String productName) {
         return String.format("%s നീക്കം ചെയ്യുക", productName);
     }
+
+    /**
+     * Button label: View Fish (for interactive list button)
+     * 
+     * @return Button label in Malayalam
+     */
+    public String getButtonViewFish() {
+        return "മീൻ കാണുക";
+    }
+
+    /**
+     * Section title: Available Fish (for interactive list section)
+     * 
+     * @return Section title in Malayalam
+     */
+    public String getSectionTitleAvailableFish() {
+        return "ലഭ്യമായ മീൻ";
+    }
+
+    /**
+     * Button label: Accept Order (for delivery person)
+     * 
+     * @return Button label in Malayalam
+     */
+    public String getButtonAcceptOrder() {
+        return "✅ ഓർഡർ സ്വീകരിക്കുക";
+    }
 }
