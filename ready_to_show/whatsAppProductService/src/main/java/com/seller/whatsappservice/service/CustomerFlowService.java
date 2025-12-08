@@ -330,11 +330,14 @@ public class CustomerFlowService {
         customer.setCurrentFlowStage(CustomerFlowStage.BROWSING);
     }
 
+    @org.springframework.beans.factory.annotation.Value("${app.server.url}")
+    private String appServerUrl;
+
     /**
      * Send product carousel for products with images
      */
     private void sendProductCarousel(Customer customer, List<FishProduct> products, String dummyMediaId) {
-        log.info("Preparing carousel with dummyMediaId: {}", dummyMediaId);
+        log.info("Preparing carousel with {} products", products.size());
         List<FishProduct> limitedProducts = products.stream()
                 .limit(10)
                 .collect(Collectors.toList());
@@ -342,18 +345,26 @@ public class CustomerFlowService {
         List<WhatsAppMessageDto.CarouselCardDto> cards = java.util.stream.IntStream.range(0, limitedProducts.size())
                 .mapToObj(i -> {
                     FishProduct product = limitedProducts.get(i);
-                    String mediaId;
+                    // Construct image URL
+                    String imageUrl;
                     if (!product.getOrderedImages().isEmpty()) {
-                        // Get the first image for the product
-                        ProductImage firstImage = product.getOrderedImages().get(0);
-                        mediaId = whatsAppMediaService.getOrUploadMediaId(firstImage);
+                        imageUrl = appServerUrl + "/api/public/images/products/" + product.getId() + "?t="
+                                + System.currentTimeMillis();
                     } else {
-                        mediaId = null;
-                    }
-
-                    // Fallback to dummy image if specific image unavailable or upload failed
-                    if (mediaId == null) {
-                        mediaId = dummyMediaId;
+                        // Fallback to placeholder image URL if available or use a default one
+                        // Since we don't have a public URL for the dummy image, we'll try to use the
+                        // Media ID logic
+                        // BUT mixed types might fail. For now, let's stick to URL.
+                        // Ideally, we should have a /api/public/images/placeholder endpoint or similar.
+                        // But for now, let's use the wikimedia one as fallback if no backend image
+                        // exists,
+                        // although the filtering logic ensures 'carouselProducts' have images OR
+                        // dummyMediaId.
+                        // Since we are shifting to URLs, we should probably serve the dummy image via
+                        // URL too.
+                        // For this iteration, I'll use the hardcoded WA logo as the "Dummy" URL
+                        // fallback if no product image.
+                        imageUrl = "https://upload.wikimedia.org/wikipedia/commons/thumb/6/6b/WhatsApp.svg/1200px-WhatsApp.svg.png";
                     }
 
                     return WhatsAppMessageDto.CarouselCardDto.builder()
@@ -362,7 +373,7 @@ public class CustomerFlowService {
                             .header(WhatsAppMessageDto.HeaderDto.builder()
                                     .type("image")
                                     .image(WhatsAppMessageDto.ImageDto.builder()
-                                            .link("https://upload.wikimedia.org/wikipedia/commons/thumb/6/6b/WhatsApp.svg/1200px-WhatsApp.svg.png")
+                                            .link(imageUrl)
                                             .build())
                                     .build())
                             .body(WhatsAppMessageDto.BodyDto.builder()
